@@ -1,4 +1,4 @@
-package model
+package models
 
 type Notifs struct {
 	Email string `json:"email"`

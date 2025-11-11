@@ -1,0 +1,46 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"      # AMQP port
+      - "15672:15672"    # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    restart: unless-stopped
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  push-service:
+    build: .
+    container_name: push-service
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - REDIS_ADDR=redis:6379
+      - FIREBASE_CREDENTIALS_PATH=/app/israeldev-8874d-firebase-adminsdk-jisqg-64ff209a42.json
+      - USER_SERVICE_URL=http://user-service:8081/api/v1/users
+      - TEMPLATE_SERVICE_URL=http://template-service:8082/api/v1/templates
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./israeldev-8874d-firebase-adminsdk-jisqg-64ff209a42.json:/app/israeldev-8874d-firebase-adminsdk-jisqg-64ff209a42.json:ro
