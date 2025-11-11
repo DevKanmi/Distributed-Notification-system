@@ -45,11 +45,11 @@ func NewPushWorker(ch *amqp.Channel, rdb *redis.Client, fcmClient *messaging.Cli
 			return counts.Requests >= 10 && failureRatio >= 0.6
 		},
 		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
-			fmt.Printf("Circuit Breaker '%s' changed from %s to %s\n", name, from, to)
-		},
+			userData, err := w.fetchUserData(job.UserID)
+			if err != nil { w.handleTransientFailure(ctx, d, &job, fmt.Errorf("user lookup failed: %w", err)); return }
 	})
 
-	return &PushWorker{
+			if err != nil { w.handleTransientFailure(ctx, d, &job, fmt.Errorf("template lookup failed: %w", err)); return }
 		RabbitMQChannel: ch,
 		RedisClient:     rdb,
 		FCMClient:       fcmClient, // SET FCM CLIENT
@@ -108,7 +108,7 @@ func (w *PushWorker) ProcessMessage(d amqp.Delivery) {
 	})
 
 	if deliveryErr != nil {
-		w.handleTransientFailure(d, &job, fmt.Errorf("push delivery failed (CB state: %s): %w", w.FCMBreaker.State().String(), deliveryErr))
+		w.handleTransientFailure(ctx, d, &job, fmt.Errorf("push delivery failed (CB state: %s): %w", w.FCMBreaker.State().String(), deliveryErr))
 		return
 	}
 
@@ -167,7 +167,8 @@ func (w *PushWorker) markAsProcessed(ctx context.Context, requestID string) {
 }
 
 // handleTransientFailure increments retry count and rejects the message for DLQ routing.
-func (w *PushWorker) handleTransientFailure(d amqp.Delivery, job *models.PushNotificationJob, err error) {
+// It now accepts a context so it can cleanup the idempotency key in Redis when re-queuing.
+func (w *PushWorker) handleTransientFailure(ctx context.Context, d amqp.Delivery, job *models.PushNotificationJob, err error) {
 	// Production Change: Log this with an ERROR level, including correlation ID
 	fmt.Printf("[%s] Transient failure (Retry %d/%d): %v. Re-queuing via DLX.\n", job.CorrelationID, job.RetryCount, w.Config.MaxRetries, err)
 
@@ -204,6 +205,11 @@ func (w *PushWorker) handleTransientFailure(d amqp.Delivery, job *models.PushNot
 	}
 	
 	// Acknowledge the original delivery since we successfully published the updated copy.
+	// Remove the idempotency key so the retried message can be processed again.
+	if _, delErr := w.RedisClient.Del(ctx, "push:processed:"+job.RequestID).Result(); delErr != nil {
+		fmt.Printf("Warning: failed to remove idempotency key for %s: %v\n", job.RequestID, delErr)
+	}
+
 	d.Ack(false)
 }
 
