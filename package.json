@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@types/opossum": "^8.1.9",
+    "opossum": "^9.0.0"
+  }
+}
